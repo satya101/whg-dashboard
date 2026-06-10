@@ -52,17 +52,17 @@ const ARCHIVED_PRODUCTS = new Set([
  * Files arrive 9–11pm, so this ensures they are always present before processing.
  */
 function runDailyUpdate() {
-  const props = PropertiesService.getScriptProperties().getAll();
+  const sp = PropertiesService.getScriptProperties();
 
-  const GITHUB_TOKEN  = props.GITHUB_TOKEN;
-  const GITHUB_OWNER  = props.GITHUB_OWNER;
-  const GITHUB_REPO   = props.GITHUB_REPO;
-  const GITHUB_BRANCH = props.GITHUB_BRANCH || 'main';
-  const DATA_PATH     = props.DATA_PATH      || 'data/fleet.json';
+  const GITHUB_TOKEN  = sp.getProperty('GITHUB_TOKEN');
+  const GITHUB_OWNER  = sp.getProperty('GITHUB_OWNER');
+  const GITHUB_REPO   = sp.getProperty('GITHUB_REPO');
+  const GITHUB_BRANCH = sp.getProperty('GITHUB_BRANCH') || 'main';
+  const DATA_PATH     = sp.getProperty('DATA_PATH')      || 'data/fleet.json';
 
-  const LABEL        = props.GMAIL_LABEL            || 'FirmwareReport';
-  const FW_SUBJECT   = props.GMAIL_SUBJECT_FIRMWARE || 'Data Export Vehicle';
-  const ACCT_SUBJECT = props.GMAIL_SUBJECT_ACCOUNT  || 'Data Export Account';
+  const LABEL        = sp.getProperty('GMAIL_LABEL')            || 'FirmwareReport';
+  const FW_SUBJECT   = sp.getProperty('GMAIL_SUBJECT_FIRMWARE') || 'Data Export Vehicle';
+  const ACCT_SUBJECT = sp.getProperty('GMAIL_SUBJECT_ACCOUNT')  || 'Data Export Account';
 
   if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
     Logger.log('ERROR: Missing required Script Properties (GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO).');
@@ -265,57 +265,61 @@ function splitCsvLine(line) {
  * → delete temp file. No external libraries needed.
  */
 function parseXlsx(bytes) {
-  let tempFile = null;
-  let tempSheet = null;
+  let tempFileId  = null;
+  let tempSheetId = null;
 
   try {
-    // 1. Save bytes to a temporary Drive file
-    const blob = Utilities.newBlob(bytes,
+    // 1. Write XLSX bytes to a temp Drive file
+    const blob = Utilities.newBlob(
+      bytes,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'WHG_temp_import.xlsx');
+      'WHG_temp_import.xlsx'
+    );
+    const tempFile = DriveApp.createFile(blob);
+    tempFileId = tempFile.getId();
+    Logger.log('Temp XLSX created — id: ' + tempFileId);
 
-    tempFile = DriveApp.createFile(blob);
-    Logger.log('Temp XLSX file created: ' + tempFile.getId());
-
-    // 2. Convert to Google Sheets so Apps Script can read it
-    const resource = {
-      title: 'WHG_temp_sheet',
-      mimeType: MimeType.GOOGLE_SHEETS,
-      parents: [{ id: tempFile.getParents().next().getId() }]
-    };
-
-    const converted = Drive.Files.copy(
-      { title: 'WHG_temp_sheet' },
-      tempFile.getId(),
+    // 2. Import into Google Sheets via Drive API v2 (convert:true)
+    //    Drive.Files.copy returns a File resource with an .id property.
+    const sheetsFile = Drive.Files.copy(
+      { title: 'WHG_temp_sheet', mimeType: 'application/vnd.google-apps.spreadsheet' },
+      tempFileId,
       { convert: true }
     );
-    tempSheet = DriveApp.getFileById(converted.id);
+    tempSheetId = sheetsFile.id;
+    Logger.log('Temp Sheets file — id: ' + tempSheetId);
 
-    // 3. Read the first sheet
-    const ss     = SpreadsheetApp.openById(converted.id);
-    const sheet  = ss.getSheets()[0];
-    const data   = sheet.getDataRange().getValues();
+    // 3. Give Drive a moment to finish the conversion before opening
+    Utilities.sleep(3000);
+
+    // 4. Open and read first sheet
+    const ss    = SpreadsheetApp.openById(tempSheetId);
+    const sheet = ss.getSheets()[0];
+    const data  = sheet.getDataRange().getValues();
+    Logger.log('Sheet dimensions: ' + data.length + ' rows x ' + (data[0] ? data[0].length : 0) + ' cols');
 
     if (data.length < 2) {
-      Logger.log('XLSX appears empty (< 2 rows).');
+      Logger.log('XLSX sheet appears empty after conversion.');
       return [];
     }
 
-    // 4. Build row objects using row 1 as headers
+    // 5. Row 1 = headers, remaining rows = data
     const headers = data[0].map(h => String(h).trim());
+    Logger.log('Headers found: ' + headers.filter(Boolean).join(', '));
+
     const rows = [];
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      // Skip entirely blank rows
       if (row.every(cell => cell === '' || cell === null || cell === undefined)) continue;
       const obj = {};
       headers.forEach((h, idx) => {
         let val = row[idx];
-        // Normalise: dates come back as Date objects from Sheets
         if (val instanceof Date) {
-          val = Utilities.formatDate(val, 'UTC', 'yyyy-MM-dd HH:mm:ss');
+          // Sheets returns dates as Date objects — normalise to the same
+          // "yyyy-MM-dd HH:mm:ss" string format used by the CSV export
+          val = Utilities.formatDate(val, 'Australia/Sydney', 'yyyy-MM-dd HH:mm:ss');
         } else {
-          val = val === null || val === undefined ? '' : String(val).trim();
+          val = (val === null || val === undefined) ? '' : String(val).trim();
         }
         obj[h] = val;
       });
@@ -327,11 +331,12 @@ function parseXlsx(bytes) {
 
   } catch (e) {
     Logger.log('XLSX parse error: ' + e.message);
+    Logger.log('Stack: ' + e.stack);
     return [];
   } finally {
-    // 5. Always clean up temp files from Drive
-    try { if (tempFile)  tempFile.setTrashed(true);  } catch (e) {}
-    try { if (tempSheet) tempSheet.setTrashed(true); } catch (e) {}
+    // Always delete both temp files — even if an error occurred
+    try { if (tempFileId)  DriveApp.getFileById(tempFileId).setTrashed(true);  } catch(e) { Logger.log('Cleanup error (xlsx): ' + e.message); }
+    try { if (tempSheetId) DriveApp.getFileById(tempSheetId).setTrashed(true); } catch(e) { Logger.log('Cleanup error (sheet): ' + e.message); }
   }
 }
 
