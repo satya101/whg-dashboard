@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WHG Firmware & Health Reporting Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --bg:      #080d1a;
+    --bg2:     #0d1526;
+    --bg3:     #111e35;
+    --bg4:     #162340;
+    --border:  #1e3058;
+    --border2: #243a6a;
+    --accent:  #1a6fff;
+    --accent2: #00c8ff;
+    --text:    #c8d8f0;
+    --text2:   #7a98c8;
+    --text3:   #4a6898;
+    --green:   #00e676;
+    --yellow:  #ffd600;
+    --orange:  #ff9100;
+    --red:     #ff1744;
+    --purple:  #e040fb;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Exo 2',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; font-size:13px; }
+
+  /* ── LOADING OVERLAY ── */
+  #loading-overlay {
+    position:fixed; inset:0; background:var(--bg); z-index:999;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px;
+  }
+  #loading-overlay.hidden { display:none; }
+  .spinner {
+    width:48px; height:48px;
+    border:3px solid var(--border2);
+    border-top-color:var(--accent);
+    border-radius:50%;
+    animation:spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .loading-text { font-family:'Rajdhani',sans-serif; font-size:16px; color:var(--text2); letter-spacing:1px; }
+  .loading-sub  { font-size:12px; color:var(--text3); }
+  #error-banner {
+    display:none; background:#1a0a0a; border:1px solid var(--red);
+    border-radius:6px; padding:16px 24px; max-width:520px; text-align:center;
+  }
+  #error-banner p { color:var(--red); font-size:13px; margin-bottom:8px; }
+  #error-banner small { color:var(--text3); font-size:11px; }
+
+  /* ── HEADER ── */
+  .header {
+    display:flex; align-items:center; gap:16px;
+    padding:14px 24px; background:var(--bg2); border-bottom:1px solid var(--border);
+  }
+  .logo-box {
+    background:var(--accent); color:#fff;
+    font-family:'Rajdhani',sans-serif; font-weight:700; font-size:16px;
+    padding:6px 10px; border-radius:4px; letter-spacing:1px; flex-shrink:0;
+  }
+  .header-title h1 { font-family:'Rajdhani',sans-serif; font-size:18px; font-weight:700; letter-spacing:1px; color:#fff; }
+  .header-title p  { font-size:11px; color:var(--text2); letter-spacing:.5px; }
+  .header-meta { margin-left:auto; display:flex; gap:24px; font-size:11px; color:var(--text2); flex-shrink:0; }
+  .header-meta span { display:block; color:var(--text3); }
+  .header-meta strong { color:var(--text); font-family:'Share Tech Mono'; }
+  .status-dot {
+    display:inline-block; width:8px; height:8px; border-radius:50%;
+    background:var(--green); margin-right:6px;
+    animation:pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── MAIN ── */
+  .main { padding:0 24px 32px; }
+
+  /* ── ROW 1: FILTERS ── */
+  .filter-row {
+    display:flex; gap:12px; padding:14px 0;
+    align-items:flex-end; flex-wrap:wrap; border-bottom:1px solid var(--border);
+  }
+  .filter-group { display:flex; flex-direction:column; gap:4px; }
+  .filter-group label { font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:.8px; }
+  .filter-group input,
+  .filter-group select {
+    background:var(--bg3); border:1px solid var(--border);
+    border-radius:4px; color:var(--text);
+    padding:6px 10px; font-family:'Exo 2',sans-serif; font-size:12px;
+    outline:none; transition:border-color .2s; min-width:130px;
+  }
+  .filter-group input:focus,
+  .filter-group select:focus { border-color:var(--accent); }
+  .filter-group input[type="date"] { font-family:'Share Tech Mono'; }
+
+  /* ── ROW 2: UPLOAD ── */
+  .upload-row {
+    display:flex; gap:12px; padding:10px 0;
+    border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;
+  }
+  .upload-info { font-size:11px; color:var(--text3); margin-left:auto; }
+  .upload-info strong { color:var(--text2); font-family:'Share Tech Mono'; }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:7px 16px; border-radius:4px; border:none;
+    cursor:pointer; font-family:'Exo 2',sans-serif;
+    font-size:12px; font-weight:600; letter-spacing:.5px; transition:all .2s;
+    white-space:nowrap;
+  }
+  .btn-primary   { background:var(--accent);  color:#fff; }
+  .btn-primary:hover  { background:#2a7fff; }
+  .btn-secondary { background:var(--bg4); color:var(--text); border:1px solid var(--border2); }
+  .btn-secondary:hover { background:var(--border); }
+  .btn-green { background:#00c853; color:#000; }
+  .btn-green:hover  { background:var(--green); }
+  .btn-outline { background:transparent; color:var(--accent2); border:1px solid var(--accent2); }
+  .btn-outline:hover { background:rgba(0,200,255,.08); }
+
+  /* ── ROW 3: CHARTS ── */
+  .charts-row {
+    display:grid; grid-template-columns:1fr 1fr 1fr;
+    gap:16px; padding:16px 0; border-bottom:1px solid var(--border);
+  }
+  .chart-card {
+    background:var(--bg2); border:1px solid var(--border);
+    border-radius:8px; padding:16px;
+  }
+  .chart-card h3 {
+    font-family:'Rajdhani',sans-serif; font-size:13px; font-weight:600;
+    color:var(--text2); text-transform:uppercase; letter-spacing:1px; margin-bottom:12px;
+  }
+  .donut-wrap { position:relative; width:160px; height:160px; margin:0 auto 12px; }
+  .donut-wrap canvas { width:160px!important; height:160px!important; }
+  .donut-center {
+    position:absolute; top:50%; left:50%;
+    transform:translate(-50%,-50%); text-align:center; pointer-events:none;
+  }
+  .donut-center .count { font-family:'Rajdhani',sans-serif; font-size:24px; font-weight:700; color:#fff; display:block; }
+  .donut-center .lbl   { font-size:10px; color:var(--text3); }
+  .legend { display:flex; flex-wrap:wrap; gap:6px; }
+  .legend-item {
+    display:flex; align-items:center; gap:5px;
+    font-size:11px; color:var(--text2); cursor:pointer;
+    padding:2px 6px; border-radius:3px; transition:background .15s;
+  }
+  .legend-item:hover { background:var(--bg3); }
+  .legend-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+
+  /* ── REPORTING HEALTH ── */
+  .health-section { padding:16px 0; }
+  .health-header  { display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+  .health-header h2 { font-family:'Rajdhani',sans-serif; font-size:16px; font-weight:700; letter-spacing:1px; }
+  .health-tabs { display:flex; gap:8px; flex-wrap:wrap; }
+  .tab-btn {
+    padding:5px 14px; border-radius:4px; border:1px solid var(--border);
+    background:var(--bg3); color:var(--text2);
+    font-family:'Exo 2',sans-serif; font-size:12px;
+    cursor:pointer; transition:all .2s; white-space:nowrap;
+  }
+  .tab-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .tab-btn:hover:not(.active) { border-color:var(--border2); color:var(--text); }
+  .count-badge {
+    background:var(--bg4); border:1px solid var(--border2);
+    border-radius:12px; padding:2px 10px;
+    font-size:11px; color:var(--accent2);
+    font-family:'Share Tech Mono'; font-weight:600; margin-left:4px;
+  }
+  .health-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
+
+  /* ── TABLE ── */
+  .table-container { background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .table-scroll { overflow-x:auto; max-height:440px; overflow-y:auto; }
+  table { width:100%; border-collapse:collapse; }
+  thead { position:sticky; top:0; z-index:10; }
+  thead th {
+    background:var(--bg4); padding:10px 12px; text-align:left;
+    font-size:11px; font-weight:600; color:var(--text2);
+    text-transform:uppercase; letter-spacing:.8px;
+    border-bottom:1px solid var(--border2);
+    white-space:nowrap; cursor:pointer; user-select:none; transition:color .2s;
+  }
+  thead th:hover { color:var(--accent2); }
+  thead th.sorted .sort-icon { color:var(--accent2); }
+  .sort-icon { margin-left:4px; opacity:.5; }
+  thead th.sorted .sort-icon { opacity:1; }
+  tbody tr { border-bottom:1px solid var(--border); transition:background .1s; }
+  tbody tr:hover { background:var(--bg3); }
+  tbody td { padding:8px 12px; font-size:12px; white-space:nowrap; }
+  .days-badge {
+    display:inline-block; padding:2px 8px; border-radius:3px;
+    font-family:'Share Tech Mono'; font-size:11px; font-weight:600;
+  }
+  .days-ok     { background:rgba(0,230,118,.12);  color:var(--green);  }
+  .days-warn   { background:rgba(255,214,0,.12);   color:var(--yellow); }
+  .days-danger { background:rgba(255,23,68,.12);   color:var(--red);    }
+  .sim-badge { display:inline-block; padding:1px 7px; border-radius:3px; font-size:10px; font-weight:600; }
+  .sim-telstra  { background:rgba(0,196,255,.12);  color:var(--accent2); }
+  .sim-onomondo { background:rgba(224,64,251,.12); color:var(--purple);  }
+  .sim-aeries   { background:rgba(0,230,118,.12);  color:var(--green);   }
+  .sim-other    { background:rgba(122,152,200,.12);color:var(--text2);   }
+  .table-footer {
+    padding:10px 16px; display:flex; align-items:center; justify-content:space-between;
+    border-top:1px solid var(--border); background:var(--bg3);
+  }
+  .table-footer span { font-size:12px; color:var(--text2); }
+  .table-footer strong { color:var(--accent2); font-family:'Share Tech Mono'; }
+  .no-data { text-align:center; padding:48px; color:var(--text3); }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:var(--bg2); }
+  ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background:var(--accent); }
+
+  @media(max-width:900px) {
+    .charts-row { grid-template-columns:1fr; }
+    .header-meta { display:none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div class="loading-text">LOADING FLEET DATA</div>
+  <div class="loading-sub" id="loading-sub">Fetching latest report from GitHub…</div>
+  <div id="error-banner">
+    <p id="error-msg">Could not load data</p>
+    <small id="error-detail"></small>
+  </div>
+</div>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo-box">WHG</div>
+  <div class="header-title">
+    <h1>WHG FIRMWARE AND HEALTH REPORTING DASHBOARD</h1>
+    <p>Automated daily fleet device monitoring &amp; firmware tracking</p>
+  </div>
+  <div class="header-meta">
+    <div><span>Data updated</span><strong id="hdr-updated">—</strong></div>
+    <div><span>Active records</span><strong id="hdr-total">—</strong></div>
+    <div><span><span class="status-dot"></span>Live</span><strong id="hdr-file">—</strong></div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- ROW 1: FILTERS -->
+  <div class="filter-row">
+    <div class="filter-group">
+      <label>From</label>
+      <input type="date" id="f-from">
+    </div>
+    <div class="filter-group">
+      <label>To</label>
+      <input type="date" id="f-to">
+    </div>
+    <div class="filter-group">
+      <label>Account</label>
+      <select id="f-account"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Product Type</label>
+      <select id="f-product"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Firmware</label>
+      <select id="f-firmware"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>SIM</label>
+      <select id="f-sim"><option value="">All</option></select>
+    </div>
+    <button class="btn btn-secondary" onclick="resetFilters()">↺ Reset</button>
+  </div>
+
+  <!-- ROW 2: UPLOAD / DATA SOURCE -->
+  <div class="upload-row">
+    <button class="btn btn-primary" onclick="document.getElementById('data-upload').click()">⬆ Manual Data Upload</button>
+    <button class="btn btn-secondary" onclick="document.getElementById('account-upload').click()">⬆ Account Link Upload</button>
+    <button class="btn btn-outline" onclick="refreshFromGitHub()">⟳ Refresh Live Data</button>
+    <input type="file" id="data-upload"   accept=".csv" style="display:none" onchange="handleDataUpload(event)">
+    <input type="file" id="account-upload" accept=".csv" style="display:none" onchange="handleAccountUpload(event)">
+    <div class="upload-info">
+      Auto-refreshes daily via Gmail → GitHub pipeline &nbsp;|&nbsp;
+      Last load: <strong id="load-time">—</strong>
+    </div>
+  </div>
+
+  <!-- ROW 3: CHARTS -->
+  <div class="charts-row">
+    <div class="chart-card">
+      <h3>Product Type</h3>
+      <div class="donut-wrap">
+        <canvas id="chart-product"></canvas>
+        <div class="donut-center"><span class="count" id="ct-product">0</span><span class="lbl">total</span></div>
+      </div>
+      <div class="legend" id="leg-product"></div>
+    </div>
+    <div class="chart-card">
+      <h3>Firmware</h3>
+      <div class="donut-wrap">
+        <canvas id="chart-firmware"></canvas>
+        <div class="donut-center"><span class="count" id="ct-firmware">0</span><span class="lbl">total</span></div>
+      </div>
+      <div class="legend" id="leg-firmware"></div>
+    </div>
+    <div class="chart-card">
+      <h3>SIM Card</h3>
+      <div class="donut-wrap">
+        <canvas id="chart-sim"></canvas>
+        <div class="donut-center"><span class="count" id="ct-sim">0</span><span class="lbl">total</span></div>
+      </div>
+      <div class="legend" id="leg-sim"></div>
+    </div>
+  </div>
+
+  <!-- REPORTING HEALTH TABLE -->
+  <div class="health-section">
+    <div class="health-header">
+      <h2>Reporting Health</h2>
+      <div class="health-tabs">
+        <button class="tab-btn active" data-tab="all" onclick="setTab(this)">All <span class="count-badge" id="tc-all">0</span></button>
+        <button class="tab-btn" data-tab="14"  onclick="setTab(this)">&gt; 14 days <span class="count-badge" id="tc-14">0</span></button>
+        <button class="tab-btn" data-tab="8"   onclick="setTab(this)">8–14 days <span class="count-badge" id="tc-8">0</span></button>
+        <button class="tab-btn" data-tab="7"   onclick="setTab(this)">&gt; 7 days <span class="count-badge" id="tc-7">0</span></button>
+      </div>
+      <div class="health-actions">
+        <button class="btn btn-green" onclick="exportXLSX()">⬇ Export XLSX</button>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortTable('account')"   data-col="account">Account <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('licence')"   data-col="licence">Licence <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('imei')"      data-col="imei">IMEI <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('sim')"       data-col="sim">SIM <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('daysSince')" data-col="daysSince">Days Since Last Report <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('product')"   data-col="product">Product <span class="sort-icon">↕</span></th>
+              <th onclick="sortTable('firmware')"  data-col="firmware">Firmware <span class="sort-icon">↕</span></th>
+            </tr>
+          </thead>
+          <tbody id="health-tbody"></tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <span>Showing <strong id="showing-count">0</strong> records</span>
+        <span id="footer-info" style="font-size:11px;color:var(--text3)"></span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── CONFIG ─────────────────────────────────────────────────────────────────
+// UPDATE THESE after creating your GitHub repo
+const GITHUB_OWNER  = 'YOUR_GITHUB_USERNAME';   // e.g. 'rocco-whg'
+const GITHUB_REPO   = 'whg-dashboard';          // your repo name
+const GITHUB_BRANCH = 'main';
+const DATA_PATH     = 'data/fleet.json';
+
+// Constructed raw URL – no auth needed for public repos
+const DATA_URL = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${DATA_PATH}`;
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let allData   = [];
+let filtered  = [];
+let activeTab = 'all';
+let sortCol   = 'daysSince';
+let sortDir   = -1;
+let charts    = {};
+let manualAccountMap = {};
+
+const FW_COLORS   = ['#3d85c8','#f4b942','#00c49f','#e05c5c','#a78bfa','#f97316','#06b6d4','#84cc16','#ec4899','#fbbf24','#60a5fa','#34d399','#fb923c','#a3e635','#f472b6','#e2e8f0','#7c3aed'];
+const SIM_COLORS  = { 'Telstra':'#3d85c8','Onomondo Sim':'#e040fb','Aeries Sim':'#00e676','Other':'#f4b942','Unknown':'#4a6898' };
+const PROD_COLORS = ['#e05c5c','#3d85c8','#00c49f','#f4b942','#a78bfa','#f97316','#06b6d4','#84cc16','#ec4899','#fbbf24','#60a5fa','#34d399'];
+
+const ARCHIVED_PRODUCTS = new Set([
+  'QUEST FLEET STD','MYAUDI TRACK CUSTOMER','QTRAQ CUSTOMER 12V 3 WIRE',
+  'QTRAQ CUSTOMER 12V','QTRAQ CUSTOMER 24V','MYAUDI TRACK DEALER','QTRAQ',
+  'GTRAQ CUSTOMER 12V','GTRAQ CUSTOMER 12V 3 WIRE','GTRAQ CUSTOMER 24V 3 WIRE',
+  'TRACKA DEALER','TRACKA ENHANCED 3 YEAR','TRACKA ENHANCED 5 YEAR','GENTRACKER',
+  'QTRAQ CUSTOMER 24V 3 WIRE','GTRAQ','CU01 DEALER','CATM1 24V 3 WIRE',
+  'GENTRACK-DEALER','STOLEN VEHICLE RECOVERY 36 MTHS'
+]);
+
+// ─── BOOT ────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('f-from').value = '2020-01-01';
+  document.getElementById('f-to').value   = new Date().toISOString().slice(0,10);
+  refreshFromGitHub();
+});
+
+async function refreshFromGitHub() {
+  showLoading('Fetching latest report from GitHub…');
+  try {
+    // Cache-bust so Netlify CDN doesn't serve stale data
+    const url = DATA_URL + '?t=' + Date.now();
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
+    const payload = await resp.json();
+
+    const records = payload.records || payload; // support both wrapped and bare arrays
+    loadRecords(records);
+
+    const meta = payload.meta || {};
+    if (meta.updatedAt) {
+      document.getElementById('hdr-updated').textContent =
+        new Date(meta.updatedAt).toLocaleString('en-AU', {timeZone:'Australia/Sydney'});
+    }
+    if (meta.firmwareFile) {
+      document.getElementById('hdr-file').textContent = meta.firmwareFile;
+    }
+
+    document.getElementById('load-time').textContent =
+      new Date().toLocaleString('en-AU', {timeZone:'Australia/Sydney'});
+
+    hideLoading();
+  } catch(err) {
+    showError(
+      'Could not load live data from GitHub',
+      err.message + '\n\nCheck GITHUB_OWNER / GITHUB_REPO in index.html, or upload CSV files manually.'
+    );
+  }
+}
+
+function loadRecords(records) {
+  allData = records;
+  document.getElementById('hdr-total').textContent = allData.length.toLocaleString();
+  buildFilterOptions(allData);
+  applyFilters();
+}
+
+// ─── FILTERS ─────────────────────────────────────────────────────────────────
+function buildFilterOptions(data) {
+  const fill = (id, vals, current) => {
+    const sel = document.getElementById(id);
+    const cur = current !== undefined ? current : sel.value;
+    sel.innerHTML = '<option value="">All</option>';
+    [...new Set(vals)].filter(Boolean).sort().forEach(v => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = v;
+      if (v === cur) o.selected = true;
+      sel.appendChild(o);
+    });
+  };
+  fill('f-account',  data.map(r=>r.account));
+  fill('f-product',  data.map(r=>r.product));
+  fill('f-firmware', data.map(r=>r.firmware).filter(Boolean));
+  fill('f-sim',      data.map(r=>r.simType));
+}
+
+function getFilters() {
+  return {
+    from:     document.getElementById('f-from').value,
+    to:       document.getElementById('f-to').value,
+    account:  document.getElementById('f-account').value,
+    product:  document.getElementById('f-product').value,
+    firmware: document.getElementById('f-firmware').value,
+    sim:      document.getElementById('f-sim').value,
+  };
+}
+
+function applyFilters() {
+  const f = getFilters();
+  filtered = allData.filter(r => {
+    if (f.account  && r.account  !== f.account)  return false;
+    if (f.product  && r.product  !== f.product)  return false;
+    if (f.firmware && r.firmware !== f.firmware) return false;
+    if (f.sim      && r.simType  !== f.sim)      return false;
+    if ((f.from || f.to) && r.lastReported) {
+      const d = r.lastReported.slice(0,10);
+      if (f.from && d < f.from) return false;
+      if (f.to   && d > f.to)   return false;
+    }
+    return true;
+  });
+
+  // Cross-filter: repopulate options based on what's still visible
+  const filterExcept = key => allData.filter(r => {
+    if (key!=='account'  && f.account  && r.account  !== f.account)  return false;
+    if (key!=='product'  && f.product  && r.product  !== f.product)  return false;
+    if (key!=='firmware' && f.firmware && r.firmware !== f.firmware) return false;
+    if (key!=='sim'      && f.sim      && r.simType  !== f.sim)      return false;
+    return true;
+  });
+
+  const fillSynced = (id, vals, cur) => {
+    const sel = document.getElementById(id);
+    const v = cur; sel.innerHTML = '<option value="">All</option>';
+    [...new Set(vals)].filter(Boolean).sort().forEach(x => {
+      const o = document.createElement('option');
+      o.value=x; o.textContent=x;
+      if (x===v) o.selected=true;
+      sel.appendChild(o);
+    });
+  };
+  fillSynced('f-account',  filterExcept('account').map(r=>r.account),           f.account);
+  fillSynced('f-product',  filterExcept('product').map(r=>r.product),            f.product);
+  fillSynced('f-firmware', filterExcept('firmware').map(r=>r.firmware).filter(Boolean), f.firmware);
+  fillSynced('f-sim',      filterExcept('sim').map(r=>r.simType),                f.sim);
+
+  updateCharts();
+  updateTabCounts();
+  renderTable();
+}
+
+['f-from','f-to','f-account','f-product','f-firmware','f-sim'].forEach(id => {
+  document.getElementById(id).addEventListener('change', applyFilters);
+});
+
+function resetFilters() {
+  document.getElementById('f-from').value    = '2020-01-01';
+  document.getElementById('f-to').value      = new Date().toISOString().slice(0,10);
+  document.getElementById('f-account').value = '';
+  document.getElementById('f-product').value = '';
+  document.getElementById('f-firmware').value= '';
+  document.getElementById('f-sim').value     = '';
+  applyFilters();
+}
+
+// ─── CHARTS ──────────────────────────────────────────────────────────────────
+function countBy(arr, key) {
+  const c={};
+  arr.forEach(r=>{ const k=r[key]||'Unknown'; c[k]=(c[k]||0)+1; });
+  return Object.entries(c).sort((a,b)=>b[1]-a[1]);
+}
+
+function makeDonut(id, data, colors) {
+  const ctx = document.getElementById(id).getContext('2d');
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(ctx, {
+    type:'doughnut',
+    data:{
+      labels: data.map(d=>d[0]),
+      datasets:[{ data:data.map(d=>d[1]), backgroundColor:data.map((_,i)=>colors[i%colors.length]), borderWidth:0, hoverOffset:6 }]
+    },
+    options:{
+      responsive:false, cutout:'65%',
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>` ${c.label}: ${c.raw.toLocaleString()}` } } },
+      animation:{ animateRotate:true, duration:600 }
+    }
+  });
+}
+
+function buildLegend(containerId, data, colors, selectId) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  data.forEach((d,i) => {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<span class="legend-dot" style="background:${colors[i%colors.length]}"></span>${d[0]} (${d[1].toLocaleString()})`;
+    item.onclick = () => {
+      const sel = document.getElementById(selectId);
+      sel.value = sel.value===d[0] ? '' : d[0];
+      applyFilters();
+    };
+    el.appendChild(item);
+  });
+}
+
+function updateCharts() {
+  const pd = countBy(filtered,'product');
+  const fd = countBy(filtered,'firmware');
+  const sd = countBy(filtered,'simType');
+  const n  = filtered.length.toLocaleString();
+
+  ['ct-product','ct-firmware','ct-sim'].forEach(id => document.getElementById(id).textContent = n);
+
+  const pc = pd.map((_,i)=>PROD_COLORS[i%PROD_COLORS.length]);
+  const fc = fd.map((_,i)=>FW_COLORS[i%FW_COLORS.length]);
+  const sc = sd.map(d=>SIM_COLORS[d[0]]||'#e2e8f0');
+
+  makeDonut('chart-product',  pd, pc);
+  makeDonut('chart-firmware', fd, fc);
+  makeDonut('chart-sim',      sd, sc);
+
+  buildLegend('leg-product',  pd, pc, 'f-product');
+  buildLegend('leg-firmware', fd, fc, 'f-firmware');
+  buildLegend('leg-sim',      sd, sc, 'f-sim');
+}
+
+// ─── TAB ─────────────────────────────────────────────────────────────────────
+function setTab(btn) {
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  activeTab = btn.dataset.tab;
+  renderTable();
+}
+
+function getTabData() {
+  if (activeTab==='all') return filtered;
+  if (activeTab==='14')  return filtered.filter(r=>r.daysSince!==null && r.daysSince>14);
+  if (activeTab==='8')   return filtered.filter(r=>r.daysSince!==null && r.daysSince>=8 && r.daysSince<=14);
+  if (activeTab==='7')   return filtered.filter(r=>r.daysSince!==null && r.daysSince>7);
+  return filtered;
+}
+
+function updateTabCounts() {
+  document.getElementById('tc-all').textContent = filtered.length.toLocaleString();
+  document.getElementById('tc-14').textContent  = filtered.filter(r=>r.daysSince>14).length.toLocaleString();
+  document.getElementById('tc-8').textContent   = filtered.filter(r=>r.daysSince>=8&&r.daysSince<=14).length.toLocaleString();
+  document.getElementById('tc-7').textContent   = filtered.filter(r=>r.daysSince>7).length.toLocaleString();
+}
+
+// ─── SORT & RENDER ───────────────────────────────────────────────────────────
+function sortTable(col) {
+  document.querySelectorAll('thead th').forEach(th=>{
+    th.classList.remove('sorted');
+    if(th.dataset.col===col) th.classList.add('sorted');
+  });
+  if (sortCol===col) sortDir*=-1; else { sortCol=col; sortDir=-1; }
+  renderTable();
+}
+
+function renderTable() {
+  const data   = getTabData();
+  const sorted = [...data].sort((a,b)=>{
+    let av=a[sortCol], bv=b[sortCol];
+    const INF = sortDir>0 ? Infinity : -Infinity;
+    if(av===null||av===undefined) av=INF;
+    if(bv===null||bv===undefined) bv=INF;
+    return (typeof av==='string' ? av.localeCompare(bv) : av-bv) * sortDir;
+  });
+
+  document.querySelectorAll('thead th').forEach(th=>{
+    const icon = th.querySelector('.sort-icon');
+    if(!icon) return;
+    icon.textContent = th.dataset.col===sortCol ? (sortDir>0?'↑':'↓') : '↕';
+  });
+
+  const tbody = document.getElementById('health-tbody');
+  if (!sorted.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="no-data">No records match the current filters</td></tr>';
+    document.getElementById('showing-count').textContent = '0';
+    return;
+  }
+
+  const SIM_CLS = { 'Telstra':'sim-telstra','Onomondo Sim':'sim-onomondo','Aeries Sim':'sim-aeries','Other':'sim-other','Unknown':'sim-other' };
+
+  tbody.innerHTML = sorted.map(r => {
+    const dc  = r.daysSince===null ? '' : r.daysSince>14 ? 'days-danger' : r.daysSince>7 ? 'days-warn' : 'days-ok';
+    const day = r.daysSince!==null
+      ? `<span class="days-badge ${dc}">${r.daysSince.toLocaleString()}</span>`
+      : '<span style="color:var(--text3)">—</span>';
+    const sc  = SIM_CLS[r.simType]||'sim-other';
+    return `<tr>
+      <td>${r.account}</td>
+      <td style="font-family:'Share Tech Mono';font-size:11px">${r.licence}</td>
+      <td style="font-family:'Share Tech Mono';font-size:11px">${r.imei}</td>
+      <td><span class="sim-badge ${sc}">${r.simType}</span><br>
+          <span style="font-family:'Share Tech Mono';font-size:10px;color:var(--text3)">${r.sim}</span></td>
+      <td>${day}</td>
+      <td style="font-size:11px;color:var(--text2)">${r.product}</td>
+      <td style="font-family:'Share Tech Mono';font-size:11px;color:var(--accent2)">${r.firmware||'—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('showing-count').textContent = sorted.length.toLocaleString();
+}
+
+// ─── EXPORT ──────────────────────────────────────────────────────────────────
+function exportXLSX() {
+  const rows = getTabData().map(r => ({
+    Account:                r.account,
+    Licence:                r.licence,
+    IMEI:                   r.imei,
+    SIM:                    r.sim,
+    'SIM Type':             r.simType,
+    'Days Since Last Report': r.daysSince,
+    'Last Reported':        r.lastReported,
+    'Product Type':         r.product,
+    Firmware:               r.firmware
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Reporting Health');
+  XLSX.writeFile(wb, 'WHG_Reporting_Health_' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+// ─── MANUAL CSV UPLOAD ───────────────────────────────────────────────────────
+const ARCHIVED = new Set([
+  'QUEST FLEET STD','MYAUDI TRACK CUSTOMER','QTRAQ CUSTOMER 12V 3 WIRE',
+  'QTRAQ CUSTOMER 12V','QTRAQ CUSTOMER 24V','MYAUDI TRACK DEALER','QTRAQ',
+  'GTRAQ CUSTOMER 12V','GTRAQ CUSTOMER 12V 3 WIRE','GTRAQ CUSTOMER 24V 3 WIRE',
+  'TRACKA DEALER','TRACKA ENHANCED 3 YEAR','TRACKA ENHANCED 5 YEAR','GENTRACKER',
+  'QTRAQ CUSTOMER 24V 3 WIRE','GTRAQ','CU01 DEALER','CATM1 24V 3 WIRE',
+  'GENTRACK-DEALER','STOLEN VEHICLE RECOVERY 36 MTHS'
+]);
+
+function parseCsv(text) {
+  const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  if (lines.length<2) return [];
+  const hdrs = lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+  return lines.slice(1).filter(l=>l.trim()).map(line => {
+    const vals = line.split(',');
+    const row = {};
+    hdrs.forEach((h,i) => row[h] = (vals[i]||'').trim().replace(/"/g,''));
+    return row;
+  });
+}
+
+function getSimType(m) {
+  if (!m) return 'Unknown';
+  if (m.startsWith('+882')) return 'Onomondo Sim';
+  if (m.startsWith('+11'))  return 'Aeries Sim';
+  if (m.startsWith('+614')||m.startsWith('+61')) return 'Telstra';
+  return 'Other';
+}
+
+function daysSince(s) {
+  if (!s) return null;
+  try { return Math.floor((Date.now() - new Date(s.replace(' ','T')+'Z').getTime()) / 86400000); }
+  catch(e) { return null; }
+}
+
+function handleAccountUpload(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    const rows = parseCsv(ev.target.result);
+    rows.forEach(row => {
+      const id = (row['AccountId']||'').trim();
+      const nm = (row['AccountName']||'').trim();
+      if (id && nm) manualAccountMap[id] = nm;
+    });
+    alert('Account file loaded: ' + Object.keys(manualAccountMap).length + ' accounts mapped.');
+  };
+  r.readAsText(file);
+}
+
+function handleDataUpload(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    const rows  = parseCsv(ev.target.result);
+    const now   = Date.now();
+    const recs  = rows
+      .filter(row => !ARCHIVED.has((row['Product']||'').trim()))
+      .map(row => {
+        const acctId = (row['AccountId']||'').trim();
+        const mob    = (row['Device_Mobile']||'').trim();
+        const fw     = (row['Device_FirmwareVersion']||'').trim().split(/\s+/)[0];
+        const lr     = (row['Device_LastReported']||'').trim();
+        return {
+          account:      manualAccountMap[acctId] || acctId || 'Unknown',
+          accountId:    acctId,
+          licence:      (row['RegNo']||'').trim(),
+          imei:         (row['Device_Serial']||'').trim(),
+          sim:          mob,
+          simType:      getSimType(mob),
+          lastReported: lr,
+          daysSince:    daysSince(lr),
+          product:      (row['Product']||'').trim(),
+          firmware:     fw,
+        };
+      });
+    loadRecords(recs);
+    document.getElementById('hdr-updated').textContent =
+      new Date().toLocaleString('en-AU', {timeZone:'Australia/Sydney'});
+    document.getElementById('load-time').textContent =
+      new Date().toLocaleString('en-AU', {timeZone:'Australia/Sydney'});
+    document.getElementById('hdr-file').textContent = file.name;
+    alert('Loaded ' + recs.length + ' records from ' + file.name);
+  };
+  r.readAsText(file);
+}
+
+// ─── LOADING STATE ────────────────────────────────────────────────────────────
+function showLoading(msg) {
+  document.getElementById('loading-overlay').classList.remove('hidden');
+  document.getElementById('loading-sub').textContent = msg;
+  document.getElementById('error-banner').style.display = 'none';
+}
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.add('hidden');
+}
+function showError(msg, detail) {
+  document.getElementById('error-banner').style.display = 'block';
+  document.getElementById('error-msg').textContent    = msg;
+  document.getElementById('error-detail').textContent = detail;
+  document.getElementById('loading-overlay').querySelector('.spinner').style.display = 'none';
+  document.getElementById('loading-overlay').querySelector('.loading-text').textContent = 'Data Load Failed';
+}
+</script>
+</body>
+</html>
